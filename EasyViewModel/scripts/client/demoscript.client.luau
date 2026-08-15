@@ -1,15 +1,15 @@
 local EVM: EasyViewModel = require(world.Hidden.EasyViewModel)
 
-local ViewModel: Instance = world.Hidden.TemplateViewModel
+local ViewModel = Environment:FindChild("TemplateViewModel")
 EVM.SetViewModel(ViewModel)
 
 local Config: EVMConfig = {
-	InvisibleInThirdPerson = true,
+	InvisibleInThirdPerson = false,
 	InvisibleSpeed = -1,
 	Bounciness = -1,
-	LerpSpeed = -1,
+	LerpSpeed = 50,
 } :: EVMConfig
 
 EVM.SetConfig(Config)
 
-EVM.StartViewModelRuntime()
+EVM.StartViewModelRuntime(1)

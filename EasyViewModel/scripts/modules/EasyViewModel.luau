@@ -20,7 +20,7 @@ export type EVMConfig = {
 	--[[
 		The amount of "bounce" the viewmodel has when
 		following the player's camera. Anything less than
-		zero will mean it instantly snaps to the player's
+		zero will mean it instantly snaps towards the player's
 		camera.
 
 		Default = -1
@@ -46,7 +46,7 @@ export type EasyViewModel = {
 
 		Has no default value.
 	--]]
-	SetViewModel: (Model: Instance) -> boolean?;
+	SetViewModel: (Model: Instance) -> boolean?,
 
 	--[[
 		Sets the config. Must follow the EVMConfig type.
@@ -55,7 +55,7 @@ export type EasyViewModel = {
 
 		Has no default value.
 	--]]
-	SetConfig: (Config: EVMConfig) -> boolean?;
+	SetConfig: (Config: EVMConfig) -> boolean?,
 
 	--[[
 		Begins the viewmodel runtime.
@@ -65,7 +65,7 @@ export type EasyViewModel = {
 		The config and viewmodel can be updated
 		during the runtime.
 	--]] 	
-	StartViewModelRuntime: () -> nil;
+	StartViewModelRuntime: () -> nil,
 
 	--[[
 		Pauses and unpauses the viewmodel runtime, and does not
@@ -74,13 +74,18 @@ export type EasyViewModel = {
 		Setting HideViewModel makes the viewmodel hidden
 		if the runtime is paused.
 	--]]
-	ToggleViewModelRuntime: (HideViewModel: boolean?) -> nil;
+	ToggleViewModelRuntime: (HideViewModel: boolean?) -> nil,
 
 	--[[
 		Completely ends the viewmodel runtime, disconnecting events
 		and functions. Clears config and the set viewmodel aswell.
 	--]]
-	EndViewModelRuntime: () -> nil;
+	EndViewModelRuntime: () -> nil,
+
+	--[[
+		Updates the offset that is applied to the viewmodel.
+	--]]
+	UpdateViewModelOffset: (Offset: number) -> nil,
 
 	--[[
 		Returns the currently used viewmodel in the runtime.
@@ -88,67 +93,83 @@ export type EasyViewModel = {
 		equpping a gun and placing it in the client's viewmodel),
 		or playing an animation on the viewmodel.
 	--]]
-	GetViewModel: () -> Instance;
+	GetViewModel: () -> Instance
 }
 
 local EVM: EasyViewModel = {} :: EasyViewModel
 
 -- Variables
-local UsedViewModel: Instance
-local Configuration: EVMConfig
+local UsedViewModel: Instance = nil
+local Configuration: EVMConfig = {} :: EVMConfig
 local RuntimePaused: boolean = false
 local HideViewModelWhenPaused: boolean = false
 
 -- Bindable Events
 local EndRuntime: BindableEvent = script.EndRuntime
+local UpdateOffset: BindableEvent = script.UpdateOffset
 
 function EVM.SetViewModel(Model: Instance): boolean?
-	if not UsedViewModel:IsA("Instance") then return false end
+	if not Model then return false end
+	if not Model:IsA("Instance") then return false end
 	UsedViewModel = Model:Clone()
 	return true
 end
 
 function EVM.SetConfig(Config: EVMConfig): boolean?
-	Configuration.InvisibleInThirdPerson = Config.InvisibleInThirdPerson or true
-	Configuration.InvisibleSpeed = Config.InvisibleSpeed or -1
-	Configuration.Bounciness = Config.Bounciness or -1
-	Configuration.LerpSpeed = Config.LerpSpeed or -1
+	Configuration.Bounciness = if Config.Bounciness then Config.Bounciness else -1
+	Configuration.LerpSpeed = if Config.LerpSpeed then Config.LerpSpeed else -1
+	Configuration.InvisibleInThirdPerson = if Config.InvisibleInThirdPerson then Config.InvisibleInThirdPerson else true
+	Configuration.InvisibleSpeed = if Config.InvisibleSpeed then Config.InvisibleSpeed else -1
 	return true
 end
 
-function EVM.StartViewModelRuntime(): nil
-	local Client: Player = Players.LocalPlayer
+function EVM.StartViewModelRuntime(Offset: number): nil
 	local ClientCam: Camera = world.Environment.Camera
+
 	local PreRenderedConnection: PTSignalConnection = Hooks.PreRendered:Connect(function(DeltaTime: number)
+		local OffsetToApply: Vector3 = Offset * ClientCam.Forward
+		local ViewModelQuaternion: Quaternion = ClientCam.Quaternion
+		local ViewModelPosition: Vector3 = ClientCam.Position
+
+		if RuntimePaused then
+			if HideViewModelWhenPaused then UsedViewModel.Parent = world.Hidden end
+		elseif UsedViewModel.Parent == world.Hidden and not (Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson) then
+			UsedViewModel.Parent = world.Environment
+		end
+
 		if Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson then
 			if Configuration.InvisibleSpeed > 0 then
+				local Alpha: number = math.exp(-Configuration.InvisibleSpeed * DeltaTime)
 				-- lerp all alpha values (store alpha values locally for the viewmodel to transition it to normal values later)
 			else
 				UsedViewModel.Parent = world.Hidden
 			end
+			return
 		elseif ClientCam.IsFirstPerson and UsedViewModel.Parent == world.Hidden then
 			UsedViewModel.Parent = world.Environment
 		end
-
-		local ViewModelQuaternion: Quaternion = ClientCam.Quaternion
-		local ViewModelPosition: Vector3 = ClientCam.Position
-
+		
 		if Configuration.LerpSpeed > 0 then
-			ViewModelQuaternion = Quaternion.Lerp(
+			local Alpha: number = math.clamp(Configuration.LerpSpeed * DeltaTime, 0, 1)
+			ViewModelQuaternion = Quaternion.Slerp(
 				UsedViewModel.Quaternion,
 				ClientCam.Quaternion,
-				ClientCam.Quaternion - UsedViewModel.Quaternion * DeltaTime * (Configuration.Bounciness or 1)
+				Alpha
 			)
 			ViewModelPosition = Vector3.Lerp(
 				UsedViewModel.Position,
 				ClientCam.Position,
-				ClientCam.Position - UsedViewModel * DeltaTime * (Configuration.Bounciness or 1)
+				Alpha
 			)
 		end
 		
+		UsedViewModel.Position = ViewModelPosition + OffsetToApply
 		UsedViewModel.Quaternion = ViewModelQuaternion
-		UsedViewModel.Position = ViewModelPosition
-	end)	
+	end)
+
+	local UpdateOffsetConnection: PTSignalConnection = UpdateOffset.Invoked:Connect(function(NewOffset: number)
+		Offset = NewOffset
+	end)
 
 	local EndRuntimeConnection: PTSignalConnection
 	EndRuntimeConnection = EndRuntime.Invoked:Connect(function()
@@ -160,6 +181,7 @@ function EVM.StartViewModelRuntime(): nil
 		HideViewModelWhenPaused = false
 
 		PreRenderedConnection:Disconnect()
+		UpdateOffsetConnection:Disconnect()
 		EndRuntimeConnection:Disconnect()
 	end)
 
@@ -170,6 +192,10 @@ function EVM.ToggleViewModelRuntime(HideViewModel: boolean?): nil
 	if HideViewModel then
 		HideViewModelWhenPaused = HideViewModel
 	end
+end
+
+function EVM.UpdateViewModelOffset(Offset: number): nil
+	UpdateOffset.Invoke(Offset)
 end
 
 function EVM.EndViewModelRuntime(): nil
