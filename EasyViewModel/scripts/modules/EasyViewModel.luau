@@ -19,9 +19,11 @@ export type EVMConfig = {
 	
 	--[[
 		The amount of "bounce" the viewmodel has when
-		following the player's camera.
+		following the player's camera. Anything less than
+		zero will mean it instantly snaps to the player's
+		camera.
 
-		Default = 0
+		Default = -1
 	--]]
 	Bounciness: number;
 
@@ -90,5 +92,92 @@ export type EasyViewModel = {
 }
 
 local EVM: EasyViewModel = {} :: EasyViewModel
+
+-- Variables
+local UsedViewModel: Instance
+local Configuration: EVMConfig
+local RuntimePaused: boolean = false
+local HideViewModelWhenPaused: boolean = false
+
+-- Bindable Events
+local EndRuntime: BindableEvent = script.EndRuntime
+
+function EVM.SetViewModel(Model: Instance): boolean?
+	if not UsedViewModel:IsA("Instance") then return false end
+	UsedViewModel = Model:Clone()
+	return true
+end
+
+function EVM.SetConfig(Config: EVMConfig): boolean?
+	Configuration.InvisibleInThirdPerson = Config.InvisibleInThirdPerson or true
+	Configuration.InvisibleSpeed = Config.InvisibleSpeed or -1
+	Configuration.Bounciness = Config.Bounciness or -1
+	Configuration.LerpSpeed = Config.LerpSpeed or -1
+	return true
+end
+
+function EVM.StartViewModelRuntime(): nil
+	local Client: Player = Players.LocalPlayer
+	local ClientCam: Camera = world.Environment.Camera
+	local PreRenderedConnection: PTSignalConnection = Hooks.PreRendered:Connect(function(DeltaTime: number)
+		if Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson then
+			if Configuration.InvisibleSpeed > 0 then
+				-- lerp all alpha values (store alpha values locally for the viewmodel to transition it to normal values later)
+			else
+				UsedViewModel.Parent = world.Hidden
+			end
+		elseif ClientCam.IsFirstPerson and UsedViewModel.Parent == world.Hidden then
+			UsedViewModel.Parent = world.Environment
+		end
+
+		local ViewModelQuaternion: Quaternion = ClientCam.Quaternion
+		local ViewModelPosition: Vector3 = ClientCam.Position
+
+		if Configuration.LerpSpeed > 0 then
+			ViewModelQuaternion = Quaternion.Lerp(
+				UsedViewModel.Quaternion,
+				ClientCam.Quaternion,
+				ClientCam.Quaternion - UsedViewModel.Quaternion * DeltaTime * (Configuration.Bounciness or 1)
+			)
+			ViewModelPosition = Vector3.Lerp(
+				UsedViewModel.Position,
+				ClientCam.Position,
+				ClientCam.Position - UsedViewModel * DeltaTime * (Configuration.Bounciness or 1)
+			)
+		end
+		
+		UsedViewModel.Quaternion = ViewModelQuaternion
+		UsedViewModel.Position = ViewModelPosition
+	end)	
+
+	local EndRuntimeConnection: PTSignalConnection
+	EndRuntimeConnection = EndRuntime.Invoked:Connect(function()
+		UsedViewModel:Destroy()
+		UsedViewModel = nil
+
+		Configuration = nil
+		RuntimePaused = false
+		HideViewModelWhenPaused = false
+
+		PreRenderedConnection:Disconnect()
+		EndRuntimeConnection:Disconnect()
+	end)
+
+end
+
+function EVM.ToggleViewModelRuntime(HideViewModel: boolean?): nil
+	RuntimePaused = not RuntimePaused
+	if HideViewModel then
+		HideViewModelWhenPaused = HideViewModel
+	end
+end
+
+function EVM.EndViewModelRuntime(): nil
+	EndRuntime.Invoke()
+end
+
+function EVM.GetViewModel(): Instance
+	return UsedViewModel
+end
 
 return EVM 
