@@ -125,18 +125,22 @@ end
 
 function EVM.StartViewModelRuntime(Offset: number): nil
 	local ClientCam: Camera = world.Environment.Camera
-
+	
+	local elapsed_dt: number = 0
 	local PreRenderedConnection: PTSignalConnection = Hooks.PreRendered:Connect(function(DeltaTime: number)
-		local OffsetToApply: Vector3 = Offset * ClientCam.Forward
+		elapsed_dt += DeltaTime
+		if elapsed_dt < 1/60 then return end
+		elapsed_dt = 0
+
 		local ViewModelQuaternion: Quaternion = ClientCam.Quaternion
 		local ViewModelPosition: Vector3 = ClientCam.Position
-
+		
 		if RuntimePaused then
 			if HideViewModelWhenPaused then UsedViewModel.Parent = world.Hidden end
 		elseif UsedViewModel.Parent == world.Hidden and not (Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson) then
 			UsedViewModel.Parent = world.Environment
 		end
-
+		
 		if Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson then
 			if Configuration.InvisibleSpeed > 0 then
 				local Alpha: number = math.exp(-Configuration.InvisibleSpeed * DeltaTime)
@@ -150,20 +154,22 @@ function EVM.StartViewModelRuntime(Offset: number): nil
 		end
 		
 		if Configuration.LerpSpeed > 0 then
-			local Alpha: number = math.clamp(Configuration.LerpSpeed * DeltaTime, 0, 1)
+			local Alpha: number = 1 - math.exp(-Configuration.LerpSpeed * DeltaTime)
 			ViewModelQuaternion = Quaternion.Slerp(
 				UsedViewModel.Quaternion,
 				ClientCam.Quaternion,
 				Alpha
 			)
+
+			local OffsetToApply: Vector3 = Offset * ClientCam.Forward
 			ViewModelPosition = Vector3.Lerp(
 				UsedViewModel.Position,
-				ClientCam.Position,
+				ClientCam.Position + OffsetToApply,
 				Alpha
 			)
 		end
 		
-		UsedViewModel.Position = ViewModelPosition + OffsetToApply
+		UsedViewModel.Position = ViewModelPosition
 		UsedViewModel.Quaternion = ViewModelQuaternion
 	end)
 

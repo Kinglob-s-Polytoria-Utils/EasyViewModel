@@ -7,7 +7,7 @@ local Config: EVMConfig = {
 	InvisibleInThirdPerson = false,
 	InvisibleSpeed = -1,
 	Bounciness = -1,
-	LerpSpeed = 50,
+	LerpSpeed = 85,
 } :: EVMConfig
 
 EVM.SetConfig(Config)
