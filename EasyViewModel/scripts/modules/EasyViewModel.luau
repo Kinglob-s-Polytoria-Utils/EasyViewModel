@@ -1,3 +1,5 @@
+--!native
+
 export type EVMConfig = {
 	--[[
 		States whether or not the viewmodel should become
@@ -13,19 +15,9 @@ export type EVMConfig = {
 		is set to false. When set to -1 or anything less than 0,
 		the viewmodel is instantly made invisible.
 
-		Default = -1
+		Default = 0
 	--]]
 	InvisibleSpeed: number;
-	
-	--[[
-		The amount of "bounce" the viewmodel has when
-		following the player's camera. Anything less than
-		zero will mean it instantly snaps towards the player's
-		camera.
-
-		Default = -1
-	--]]
-	Bounciness: number;
 
 	--[[
 	  The speed at which the viewmodel follows
@@ -34,7 +26,7 @@ export type EVMConfig = {
 		the ViewModel being instantaneously set
 		to the camera's position.
 
-		Default = -1
+		Default = 0
 	--]]
 	LerpSpeed: number;
 };
@@ -65,7 +57,7 @@ export type EasyViewModel = {
 		The config and viewmodel can be updated
 		during the runtime.
 	--]] 	
-	StartViewModelRuntime: () -> nil,
+	StartViewModelRuntime: (Offset: Number) -> nil,
 
 	--[[
 		Pauses and unpauses the viewmodel runtime, and does not
@@ -116,24 +108,28 @@ function EVM.SetViewModel(Model: Instance): boolean?
 end
 
 function EVM.SetConfig(Config: EVMConfig): boolean?
-	Configuration.Bounciness = if Config.Bounciness then Config.Bounciness else -1
-	Configuration.LerpSpeed = if Config.LerpSpeed then Config.LerpSpeed else -1
+	Configuration.LerpSpeed = if Config.LerpSpeed or Config.LerpSpeed < 0 then Config.LerpSpeed else 0
 	Configuration.InvisibleInThirdPerson = if Config.InvisibleInThirdPerson then Config.InvisibleInThirdPerson else true
-	Configuration.InvisibleSpeed = if Config.InvisibleSpeed then Config.InvisibleSpeed else -1
+	Configuration.InvisibleSpeed = if Config.InvisibleSpeed or Config.InvisibleSpeed < 0 then Config.InvisibleSpeed else 0
 	return true
+end
+
+@native
+local function SpringLerpVec3(Curr: Vector3, Target: Vector3, Velocity: Vector3, Stiffness: number, DeltaTime: number): (Vector3, Vector3)
+	  local Displacement = Curr - Target
+    local SpringAccel = -Stiffness * Displacement - 2 * math.sqrt(Stiffness) * Velocity
+    Velocity += SpringAccel * DeltaTime
+    Curr += Velocity * DeltaTime
+    return Curr, Velocity
 end
 
 function EVM.StartViewModelRuntime(Offset: number): nil
 	local ClientCam: Camera = world.Environment.Camera
 	
-	local elapsed_dt: number = 0
-	local PreRenderedConnection: PTSignalConnection = Hooks.PreRendered:Connect(function(DeltaTime: number)
-		elapsed_dt += DeltaTime
-		if elapsed_dt < 1/60 then return end
-		elapsed_dt = 0
-
+	local VelocityViewModel: Vector3 = Vector3.Zero
+	local ViewModelPosition: Vector3 = UsedViewModel.Position
+	local PhysicsUpdatedConnection: PTSignalConnection = Hooks.PhysicsUpdated:Connect(function(DeltaTime: number)
 		local ViewModelQuaternion: Quaternion = ClientCam.Quaternion
-		local ViewModelPosition: Vector3 = ClientCam.Position
 		
 		if RuntimePaused then
 			if HideViewModelWhenPaused then UsedViewModel.Parent = world.Hidden end
@@ -161,11 +157,13 @@ function EVM.StartViewModelRuntime(Offset: number): nil
 				Alpha
 			)
 
-			local OffsetToApply: Vector3 = Offset * ClientCam.Forward
-			ViewModelPosition = Vector3.Lerp(
-				UsedViewModel.Position,
-				ClientCam.Position + OffsetToApply,
-				Alpha
+			local TargetPos: Vector3 = ClientCam.Position + Offset * ClientCam.Forward
+			ViewModelPosition, VelocityViewModel = SpringLerpVec3(
+				ViewModelPosition, 
+				TargetPos, 
+				VelocityViewModel, 
+				Configuration.LerpSpeed,
+				DeltaTime
 			)
 		end
 		
@@ -186,7 +184,7 @@ function EVM.StartViewModelRuntime(Offset: number): nil
 		RuntimePaused = false
 		HideViewModelWhenPaused = false
 
-		PreRenderedConnection:Disconnect()
+		PhysicsUpdatedConnection:Disconnect()
 		UpdateOffsetConnection:Disconnect()
 		EndRuntimeConnection:Disconnect()
 	end)
