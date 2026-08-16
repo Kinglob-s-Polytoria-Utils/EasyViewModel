@@ -20,6 +20,15 @@ export type EVMConfig = {
 	InvisibleSpeed: number;
 
 	--[[
+		The maximum distance the viewmodel can be from the client's
+		camera. When set to -1 or anything less than 1, the max distance
+		is set to 1.
+
+		Default = 1.
+	--]]
+	MaxDistance: number;
+
+	--[[
 	  The speed at which the viewmodel follows
 	  the player's camera. Setting this to -1
 		or anything less than 0 will result in
@@ -95,24 +104,11 @@ local UsedViewModel: Instance = nil
 local Configuration: EVMConfig = {} :: EVMConfig
 local RuntimePaused: boolean = false
 local HideViewModelWhenPaused: boolean = false
+local DefaultPartAlphas: {[string]: number} = nil
 
 -- Bindable Events
 local EndRuntime: BindableEvent = script.EndRuntime
 local UpdateOffset: BindableEvent = script.UpdateOffset
-
-function EVM.SetViewModel(Model: Instance): boolean?
-	if not Model then return false end
-	if not Model:IsA("Instance") then return false end
-	UsedViewModel = Model:Clone()
-	return true
-end
-
-function EVM.SetConfig(Config: EVMConfig): boolean?
-	Configuration.LerpSpeed = if Config.LerpSpeed or Config.LerpSpeed < 0 then Config.LerpSpeed else 0
-	Configuration.InvisibleInThirdPerson = if Config.InvisibleInThirdPerson then Config.InvisibleInThirdPerson else true
-	Configuration.InvisibleSpeed = if Config.InvisibleSpeed or Config.InvisibleSpeed < 0 then Config.InvisibleSpeed else 0
-	return true
-end
 
 @native
 local function SpringLerpVec3(Curr: Vector3, Target: Vector3, Velocity: Vector3, Stiffness: number, DeltaTime: number): (Vector3, Vector3)
@@ -123,41 +119,115 @@ local function SpringLerpVec3(Curr: Vector3, Target: Vector3, Velocity: Vector3,
     return Curr, Velocity
 end
 
+local function SetAlphas(Instances: {Instance}, Alpha: number): nil
+	for _, instance: Instance in ipairs(Instances) do
+		instance.Color.A = Alpha
+	end
+end
+
+local function GetAlphas(Instances: {Instance}): {[string]: number}
+	local alphas: {[string]: number} = table.create(#Instances)
+
+	for _, instance: Instance in ipairs(Instances) do
+		if not instance.Color then continue end
+		local uniqueID: string = instance.NetworkedObjectID
+		alphas[uniqueID] = instance.Color.A
+	end
+
+	return alphas
+end
+
+function EVM.SetViewModel(Model: Instance): boolean?
+	if not Model then return false end
+	if not Model:IsA("Instance") then return false end
+	UsedViewModel = Model:Clone()
+	UsedViewModel.Parent = world.Environment.Camera
+	UsedViewModel.Position = Vector3.Zero
+	UsedViewModel.Quaternion = Quaternion.Identity
+	DefaultPartAlphas = GetAlphas(UsedViewModel:GetDescendants())
+	return true
+end
+
+function EVM.SetConfig(Config: EVMConfig): boolean?
+	Configuration.LerpSpeed = if Config.LerpSpeed or Config.LerpSpeed < 0 then Config.LerpSpeed else 0
+	Configuration.MaxDistance = if Config.MaxDistance or Config.MaxDistance < 0 then Config.MaxDistance else 1
+	Configuration.InvisibleInThirdPerson = if Config.InvisibleInThirdPerson then Config.InvisibleInThirdPerson else true
+	Configuration.InvisibleSpeed = if Config.InvisibleSpeed or Config.InvisibleSpeed < 0 then Config.InvisibleSpeed else 0
+	return true
+end
+
+local function LerpAlphas(Instances: {Instance}, TargetAlpha: number, Rate: number): nil
+	for _, instance: Instance in ipairs(Instances) do
+		if not instance.Color then continue end
+		local partalpha: number = instance.Color.A
+		local lerped: number = math.lerp(partalpha, TargetAlpha, Rate)
+		instance.Color = Color.New(instance.Color.R, instance.Color.G, instance.Color.B, lerped)
+	end
+end
+
+local function CheckIfMatching(AlphaSet1: {[string]: number}, AlphaSet2: {[string]: number}): boolean
+	for Key: string, Alpha: number in pairs(AlphaSet1) do
+		if AlphaSet2[Key] == Alpha then continue end
+		return false
+	end
+	return true
+end
+
 function EVM.StartViewModelRuntime(Offset: number): nil
 	local ClientCam: Camera = world.Environment.Camera
+	local Descendants: {Instance} = UsedViewModel:GetDescendants()
+	local NewPartAlphas: {[string]: number} = GetAlphas(Descendants)
 	
+	local SwayOffset: Vector3 = Vector3.Zero
 	local VelocityViewModel: Vector3 = Vector3.Zero
-	local ViewModelPosition: Vector3 = UsedViewModel.Position
-	local PhysicsUpdatedConnection: PTSignalConnection = Hooks.PhysicsUpdated:Connect(function(DeltaTime: number)
-		local ViewModelQuaternion: Quaternion = ClientCam.Quaternion
+	local ViewModelPosition: Vector3 = Vector3.Forward * Offset
+	local ViewModelQuaternion: Quaternion = Quaternion.Identity
+
+	local PreRenderedConnection: PTSignalConnection = Hooks.PostRendered:Connect(function(DeltaTime: number)
+		DeltaTime = math.min(DeltaTime, 1/30)
 		
 		if RuntimePaused then
 			if HideViewModelWhenPaused then UsedViewModel.Parent = world.Hidden end
 		elseif UsedViewModel.Parent == world.Hidden and not (Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson) then
-			UsedViewModel.Parent = world.Environment
+			UsedViewModel.Parent = ClientCam
 		end
 		
 		if Configuration.InvisibleInThirdPerson and not ClientCam.IsFirstPerson then
 			if Configuration.InvisibleSpeed > 0 then
+				print("making alpha transparent")
 				local Alpha: number = math.exp(-Configuration.InvisibleSpeed * DeltaTime)
-				-- lerp all alpha values (store alpha values locally for the viewmodel to transition it to normal values later)
+				LerpAlphas(Descendants, 0, Alpha)
+				NewPartAlphas = GetAlphas(Descendants)
 			else
 				UsedViewModel.Parent = world.Hidden
 			end
 			return
-		elseif ClientCam.IsFirstPerson and UsedViewModel.Parent == world.Hidden then
-			UsedViewModel.Parent = world.Environment
+		elseif ClientCam.IsFirstPerson then
+			if UsedViewModel.Parent == world.Hidden then
+				UsedViewModel.Parent = ClientCam
+			elseif Configuration.InvisibleSpeed > 0 and not CheckIfMatching(DefaultPartAlphas, NewPartAlphas) then
+				print("making alpha normal")
+				local Alpha: number = 1 - math.exp(-Configuration.InvisibleSpeed * DeltaTime)
+				for _, instance: Instance in ipairs(Descendants) do
+					if not instance.Color then continue end
+					local lerped: number = math.lerp(instance.Color.A, DefaultPartAlphas[instance.NetworkedObjectID], Alpha)
+					instance.Color = Color.New(instance.Color.R, instance.Color.G, instance.Color.B, lerped)
+				end
+			end
 		end
 		
 		if Configuration.LerpSpeed > 0 then
 			local Alpha: number = 1 - math.exp(-Configuration.LerpSpeed * DeltaTime)
+
+			local TargetPos: Vector3 = Vector3.Forward * Offset
+			local TargetQuat: Quaternion = Quaternion.Identity
+
 			ViewModelQuaternion = Quaternion.Slerp(
-				UsedViewModel.Quaternion,
-				ClientCam.Quaternion,
+				UsedViewModel.LocalQuaternion,
+				TargetQuat,
 				Alpha
 			)
 
-			local TargetPos: Vector3 = ClientCam.Position + Offset * ClientCam.Forward
 			ViewModelPosition, VelocityViewModel = SpringLerpVec3(
 				ViewModelPosition, 
 				TargetPos, 
@@ -165,10 +235,18 @@ function EVM.StartViewModelRuntime(Offset: number): nil
 				Configuration.LerpSpeed,
 				DeltaTime
 			)
+
+			local Direction: Vector3 = TargetPos - ViewModelPosition
+			if Direction.Magnitude > Configuration.MaxDistance then
+				Direction = Direction.Normalized * (Direction.Magnitude - Configuration.MaxDistance)
+				ViewModelPosition += Direction
+				VelocityViewModel = Vector3.Zero
+			end
+
 		end
 		
-		UsedViewModel.Position = ViewModelPosition
-		UsedViewModel.Quaternion = ViewModelQuaternion
+		UsedViewModel.LocalPosition = ViewModelPosition
+		UsedViewModel.LocalQuaternion = ViewModelQuaternion
 	end)
 
 	local UpdateOffsetConnection: PTSignalConnection = UpdateOffset.Invoked:Connect(function(NewOffset: number)
@@ -184,7 +262,7 @@ function EVM.StartViewModelRuntime(Offset: number): nil
 		RuntimePaused = false
 		HideViewModelWhenPaused = false
 
-		PhysicsUpdatedConnection:Disconnect()
+		PreRenderedConnection:Disconnect()
 		UpdateOffsetConnection:Disconnect()
 		EndRuntimeConnection:Disconnect()
 	end)
