@@ -17,10 +17,9 @@ local EVM: EasyViewModel = require(world.Hidden.EasyViewModel)
 
 -- Set the viewmodel runtime config...
 local ViewmodelConfig: EVMConfig = {
-    MaxDistance = 1,
-    LerpSpeed = 25,
     InvisibleInThirdPerson = true,
-    InvisibleSpeed = 16
+    InvisibleSpeed = 16,
+    IsUIViewport = true
 }
 
 EVM.SetConfig(ViewmodelConfig)
@@ -33,7 +32,9 @@ EVM.SetViewModel(Viewmodel)
 2. Start the runtime!
 ```lua
 local Offset: number = 2
-EVM.StartViewModelRuntime(Offset)
+EVM.StartViewModelRuntime(function(LocalPos: Vector3, LocalQuat: Quaternion)
+	return Vector3.Forward * 3, LocalQuat
+end)
 
 -- You can also pause & end it!
 EVM.ToggleViewModelRuntime(true) -- set the first (and only) arg to true to hide it when paused
