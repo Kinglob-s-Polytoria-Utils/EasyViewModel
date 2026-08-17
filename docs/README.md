@@ -43,3 +43,6 @@ EVM.EndViewModelRuntime() -- this fully ends the runtime, clearing config and th
 
 ### More information
 More information can be seen in the `EasyViewModel.luau`'s built-in documentation!
+
+### Preview:
+https://github.com/user-attachments/assets/0dd0a94c-c1d6-491b-8d09-1643111564d8
