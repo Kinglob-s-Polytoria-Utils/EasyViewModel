@@ -4,12 +4,13 @@ local ViewModel = Environment:FindChild("TemplateViewModel")
 EVM.SetViewModel(ViewModel)
 
 local Config: EVMConfig = {
-	InvisibleInThirdPerson = false,
+	InvisibleInThirdPerson = true,
 	InvisibleSpeed = 10,
-	MaxDistance = 1,
-	LerpSpeed = 25
+	IsUIViewport = false,
 } :: EVMConfig
 
 EVM.SetConfig(Config)
 
-EVM.StartViewModelRuntime(2)
+EVM.StartViewModelRuntime(function(LocalPos: Vector3, LocalQuat: Quaternion)
+	return Vector3.Forward * 3, LocalQuat
+end)
